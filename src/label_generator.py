@@ -1,5 +1,6 @@
 import open3d as o3d
 from tkinter import filedialog
+from tkinter import messagebox
 import os
 import multiprocessing
 import numpy as np
@@ -77,9 +78,9 @@ class label_generator():
 
         return object_pcl
 
-    def __run_window(self, pcd_object):
+    def __run_pick_points_map_window(self, pcd_object):
         vis = o3d.visualization.VisualizerWithEditing()
-        vis.create_window(window_name='TopLeft', width=960, height=540, left=0, top=0)
+        vis.create_window(window_name='Map_Pointcloud', width=960, height=540, left=0, top=0)
         vis.add_geometry(pcd_object)
         vis.run()
         vis.destroy_window()
@@ -88,13 +89,16 @@ class label_generator():
         return
 
     def start_picking_points(self):
-        window1 = multiprocessing.Process(target=self.__run_window, args=(self.map_pointcloud,))
+
+        text = "please pick three points in the map and the object to detect the initial localisation"
+        messagebox.showinfo(title="Object initial localisation", message=text)
+        window1 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,))
         window1.start()
 
-        window2 = multiprocessing.Process(target=self.__run_window, args=(self.map_pointcloud,))
+        window2 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,))
         window2.start()
 
-        # joining the process
+        # joining the processes
         window1.join()
         window2.join()
 
