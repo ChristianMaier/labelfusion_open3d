@@ -4,6 +4,7 @@ from tkinter import messagebox
 import os
 import multiprocessing
 import numpy as np
+import warnings
 
 
 class label_generator():
@@ -19,6 +20,7 @@ class label_generator():
         self.map_filepath = ""
         self.list_object_pointcloud=[]
         self.list_object_filepath=[]
+        self.list_picked_points= np.empty((0, 2, 3, 3)) # list which stores picked points by user for each specific object, column 0 map, 1 object
 
         # Initial dir for input dialogs
         self.__initial_dir = str(os.path.dirname(os.path.abspath(__file__))).split("/src")[0]
@@ -78,34 +80,83 @@ class label_generator():
 
         return object_pcl
 
-    def __run_pick_points_map_window(self, pcd_object):
+    def __run_pick_points_map_window(self, pcd_object, return_dict):
         vis = o3d.visualization.VisualizerWithEditing()
         vis.create_window(window_name='Map_Pointcloud', width=960, height=540, left=0, top=0)
         vis.add_geometry(pcd_object)
         vis.run()
         vis.destroy_window()
         points = np.asarray(pcd_object.points)
-        print(points[vis.get_picked_points()])
+        picked_points=[]
+
+        if len(vis.get_picked_points()) < 3 :
+            raise IOError("Not enough points were picked, three points are necessary.")
+
+        elif len(vis.get_picked_points()) == 3:
+            print("Following points were picked:")
+            picked_points = points[vis.get_picked_points()]
+
+        else:
+            warnings.warn("Warning: Too many points picked. Only first three are used")
+            picked_points = points[vis.get_picked_points()]
+            print("Following points are used:")
+            picked_points = picked_points[:3]
+        print(picked_points)
+        return_dict[0] = picked_points
+        return
+
+    def __run_pick_points_object_window(self, pcd_object, return_dict):
+        vis = o3d.visualization.VisualizerWithEditing()
+        vis.create_window(window_name='Object_Pointcloud', width=960, height=540, left=960, top=0)
+        vis.add_geometry(pcd_object)
+        vis.run()
+        vis.destroy_window()
+        points = np.asarray(pcd_object.points)
+        picked_points=[]
+
+        if len(vis.get_picked_points()) < 3 :
+            raise IOError("Not enough points were picked, three points are necessary.")
+
+        elif len(vis.get_picked_points()) == 3:
+            print("Following points were picked:")
+            picked_points = points[vis.get_picked_points()]
+
+        else:
+            warnings.warn("Warning: Too many points picked. Only first three are used")
+            picked_points = points[vis.get_picked_points()]
+            print("Following points are used:")
+            picked_points = picked_points[:3]
+        print(picked_points)
+        return_dict[1] = picked_points
         return
 
     def start_picking_points(self):
 
+        self.list_picked_points = np.append(self.list_picked_points, np.zeros((1, 2, 3, 3)), axis=0)
+        manager = multiprocessing.Manager()
+        return_dict = manager.dict()
+
         text = "please pick three points in the map and the object to detect the initial localisation"
         messagebox.showinfo(title="Object initial localisation", message=text)
-        window1 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,))
+
+        window1 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,return_dict))
         window1.start()
 
-        window2 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,))
+        window2 = multiprocessing.Process(target=self.__run_pick_points_object_window, args=(self.list_object_pointcloud[0],return_dict))
         window2.start()
 
         # joining the processes
         window1.join()
         window2.join()
 
+        self.list_picked_points[-1, 0 , :, :] = return_dict[0]
+        self.list_picked_points[-1, 1, :, :] = return_dict[1]
+        print(self.list_picked_points)
         print("Picking points finished")
         return
 
 generator = label_generator()
 generator.load_map_file()
+generator.load_object_file()
 generator.start_picking_points()
 # vis2.destroy_window()
