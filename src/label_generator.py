@@ -5,7 +5,7 @@ import os
 import multiprocessing
 import numpy as np
 import warnings
-
+from scipy.spatial.transform import Rotation as R
 
 class label_generator():
 
@@ -155,8 +155,78 @@ class label_generator():
         print("Picking points finished")
         return
 
+    def align_object(self,object_identifier):
+        """ this function function aligns the object in the map from the input of the user. The initial alignment can
+        then be used by icp to get a better alignment. Alignment is done by using the points in list_picked_point calculate
+        the planes (by cross product) and align the planes. Alignment is done at the first point picked at the map and object
+
+        :input object identifier as int
+
+        :returns the aligned pointcloud of the object, pcl object in list_object_pcl is also overritten"""
+
+        aligned_pointcloud = None
+        # get the pcl of object
+        pcd_object = self.list_object_pointcloud[object_identifier]
+
+        # First calculate the vectors a and b from points
+        map_points = self.list_picked_points[object_identifier, 0, :, :]
+        map_vector_a = map_points[1,:] - map_points[0, :]
+        map_vector_b = map_points[2, :] - map_points[0, :]
+        map_cross_vector_a_b = np.cross(map_vector_a, map_vector_b)
+
+        map_coor_x = map_vector_a/np.linalg.norm(map_vector_a)
+        map_coor_z = map_cross_vector_a_b/np.linalg.norm(map_cross_vector_a_b)
+        map_coor_y = np.cross(map_coor_x, map_coor_z)/np.linalg.norm(np.cross(map_coor_x, map_coor_z))
+
+        object_points = self.list_picked_points[object_identifier, 1, :, :]
+        object_vector_a = object_points[1, :] - object_points[0, :]
+        object_vector_b = object_points[2, :] - object_points[0, :]
+        object_points_cross_vector_a_b = np.cross(object_vector_a, object_vector_b)
+
+        object_coor_x = object_vector_a/np.linalg.norm(object_vector_a)
+        object_coor_z = object_points_cross_vector_a_b/np.linalg.norm(object_points_cross_vector_a_b)
+        object_coor_y = np.cross(object_coor_x, object_coor_z)/np.linalg.norm(np.cross(object_coor_x, object_coor_z))
+
+        rotation_matrix_unit_to_object = np.transpose(np.array([object_coor_x, object_coor_y, object_coor_z]))
+        rotation_matrix_unit_to_map = np.transpose(np.array([map_coor_x, map_coor_y , map_coor_z]))
+
+        rotation_matrix_object_to_unit = np.linalg.inv(rotation_matrix_unit_to_object)
+        rotation_matrix = np.matmul(rotation_matrix_unit_to_map, rotation_matrix_object_to_unit)
+
+        # shift object to positon in map, then rotate the object. Center of Rotation are the first picked points
+        translation_vector_object = map_points[0, :] - object_points[0, :]
+        pcd_object.translate(translation_vector_object)
+
+        pcd_object.rotate(rotation_matrix, map_points[0, :])
+
+        print("Starting ICP:")
+        threshold = 0.02
+        print(o3d.pipelines.registration.evaluate_registration(pcd_object, self.map_pointcloud, threshold))
+        reg_p2p = o3d.pipelines.registration.registration_icp(pcd_object, self.map_pointcloud, threshold,
+                                                              np.array(
+                                                                  [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.],
+                                                                   [0., 0., 0., 1.]]),
+                                                              o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+                                                              o3d.pipelines.registration.ICPConvergenceCriteria(
+                                                                  max_iteration=50))
+
+        pcd_object.transform(reg_p2p.transformation)
+
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(window_name='Object_Alignment', width=960, height=540, left=960, top=0)
+        vis.add_geometry(pcd_object)
+        vis.update_geometry(pcd_object)
+        vis.add_geometry(self.map_pointcloud)
+        vis.update_geometry(self.map_pointcloud)
+        vis.run()
+        vis.destroy_window()
+
+        return aligned_pointcloud
+
+
 generator = label_generator()
 generator.load_map_file()
 generator.load_object_file()
 generator.start_picking_points()
+generator.align_object(0)
 # vis2.destroy_window()
