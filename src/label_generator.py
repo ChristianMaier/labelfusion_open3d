@@ -41,7 +41,7 @@ class label_generator():
 
         dataset_path = filedialog.askdirectory(initialdir=self.__initial_dir, title="Select directory of log")
         if not dataset_path:
-            raise IOError("No directory for saving log was given. Log recording canceled.")
+            raise IOError("No directory for saving log was given. Labeling pipeline canceled.")
 
         self.log_path = dataset_path
 
@@ -57,26 +57,46 @@ class label_generator():
             print("Map_file found successfully. Following file was found:")
             print(self.map_filepath)
 
+        def manual_import_handler(self):
+            warnings.warn("Warning: Automatic object import failed. PLease pick objects manually")
+            self.list_object_pointcloud = []
+            self.list_object_filepath = []
+
+            while True:
+                MsgBox = messagebox.askquestion('Object import.', 'Automatic Object import failed. Please add objects '
+                                                                  'manually. Do you want add another object?',
+                                                icon='warning')
+                if MsgBox == 'yes':
+                    self.load_object_file()
+                else:
+                    break
+
+            print("Following Files were loaded:")
+            print(self.list_object_filepath)
+            if self.list_object_filepath == []:
+                warnings.warn("Warning: No objects were loaded. Trying to continue")
+
         if os.path.exists(os.path.join(self.log_path, "cad_data", "object_meshes")):
             DIR = os.path.join(self.log_path, "cad_data", "object_meshes")
             print (len([name for name in os.listdir(DIR) if os.path.isfile(os.path.join(DIR, name))]) )
             print("Following Files were found:")
             print ([name for name in os.listdir(DIR) if os.path.isfile(os.path.join(DIR, name))])
 
-            try:
-                for name in os.listdir(DIR):
-                    if os.path.isfile(os.path.join(DIR, name)):
-                        self.list_object_filepath.append(os.path.join(DIR, name))
-                        self.list_object_pointcloud.append(o3d.io.read_point_cloud(os.path.join(DIR, name)))
+            if os.listdir(DIR) == []:
+                manual_import_handler(self)
+                return
 
-                print("Following Files were loaded:")
-                print(self.list_object_filepath)
+            # TODO add handling if open3d cannot open file
+            for name in os.listdir(DIR):
+                if os.path.isfile(os.path.join(DIR, name)):
+                    self.list_object_filepath.append(os.path.join(DIR, name))
+                    self.list_object_pointcloud.append(o3d.io.read_point_cloud(os.path.join(DIR, name)))
 
-            except:
-                warnings.warn("Warning: Automatic object import failed. PLease pick objects manually")
-                self.list_object_pointcloud = []
-                self.list_object_filepath = []
+            print("Following Files were loaded:")
+            print(self.list_object_filepath)
 
+        else:
+            manual_import_handler(self)
 
         return
 
