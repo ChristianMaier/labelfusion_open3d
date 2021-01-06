@@ -5,7 +5,8 @@ import os
 import multiprocessing
 import numpy as np
 import warnings
-from scipy.spatial.transform import Rotation as R
+import pickle
+
 
 class label_generator():
 
@@ -21,9 +22,61 @@ class label_generator():
         self.list_object_pointcloud=[]
         self.list_object_filepath=[]
         self.list_picked_points= np.empty((0, 2, 3, 3)) # list which stores picked points by user for each specific object, column 0 map, 1 object
+        self.list_transform_matrices_objects= np.empty((0, 4, 4)) # list of the transform_matrices where the objects where detected
+        self.log_path = ""
+
 
         # Initial dir for input dialogs
         self.__initial_dir = str(os.path.dirname(os.path.abspath(__file__))).split("/src")[0]
+
+        return
+
+    def load_log_directory(self):
+        """loads a log directory and tries to find the map_file (log.klg.ply) and the objects to detect in object_meshes
+        If files cannot be found the load-map_file, or load_object_file are called
+
+
+        :returns: nothing, files are directly stored in the object variables
+        """
+
+        dataset_path = filedialog.askdirectory(initialdir=self.__initial_dir, title="Select directory of log")
+        if not dataset_path:
+            raise IOError("No directory for saving log was given. Log recording canceled.")
+
+        self.log_path = dataset_path
+
+        if not os.path.isfile(os.path.join(self.log_path, "cad_data", "log.klg.ply")):
+            print("Map file not found. Please select map file manually.")
+            self.load_map_file()
+
+        else:
+            map_filepath = os.path.join(self.log_path, "cad_data", "log.klg.ply")
+            self.map_filepath = map_filepath
+            map_pcl = o3d.io.read_point_cloud(map_filepath)
+            self.map_pointcloud = map_pcl
+            print("Map_file found successfully. Following file was found:")
+            print(self.map_filepath)
+
+        if os.path.exists(os.path.join(self.log_path, "cad_data", "object_meshes")):
+            DIR = os.path.join(self.log_path, "cad_data", "object_meshes")
+            print (len([name for name in os.listdir(DIR) if os.path.isfile(os.path.join(DIR, name))]) )
+            print("Following Files were found:")
+            print ([name for name in os.listdir(DIR) if os.path.isfile(os.path.join(DIR, name))])
+
+            try:
+                for name in os.listdir(DIR):
+                    if os.path.isfile(os.path.join(DIR, name)):
+                        self.list_object_filepath.append(os.path.join(DIR, name))
+                        self.list_object_pointcloud.append(o3d.io.read_point_cloud(os.path.join(DIR, name)))
+
+                print("Following Files were loaded:")
+                print(self.list_object_filepath)
+
+            except:
+                warnings.warn("Warning: Automatic object import failed. PLease pick objects manually")
+                self.list_object_pointcloud = []
+                self.list_object_filepath = []
+
 
         return
 
@@ -38,10 +91,10 @@ class label_generator():
         :return: returns loaded map file, returns None if user didn't choose a file
         """
         map_pcl = None
-        map_filepath = ""
+
         map_filepath = filedialog.askopenfilename(initialdir =self.__initial_dir, title ="Select Map Pointcloud",
                                            filetypes = (("mesh_files","*.ply"),("all files","*.*")))
-        if map_filepath == "":
+        if not map_filepath:
             print("No Map_File was selected. Trying to continue.")
             return map_pcl
         else:
@@ -65,10 +118,9 @@ class label_generator():
         """
 
         object_pcl = None
-        object_filepath = ""
         object_filepath = filedialog.askopenfilename(initialdir =self.__initial_dir, title ="Select Object Pointcloud",
                                                      filetypes = (("mesh_files","*.ply"),("all files","*.*")))
-        if object_filepath == "":
+        if not object_filepath:
             print("No Object_File was selected. Trying to continue.")
             return object_pcl
         else:
@@ -132,7 +184,11 @@ class label_generator():
 
     def start_picking_points(self):
 
+        # initialize lists. they are filled later
         self.list_picked_points = np.append(self.list_picked_points, np.zeros((1, 2, 3, 3)), axis=0)
+        self.list_transform_matrices_objects = np.append(self.list_transform_matrices_objects, np.zeros(((1, 4, 4))), axis=0)
+        self.list_transform_matrices_objects[-1, : , :] = np.eye(4)
+
         manager = multiprocessing.Manager()
         return_dict = manager.dict()
 
@@ -165,10 +221,11 @@ class label_generator():
         :returns the aligned pointcloud of the object, pcl object in list_object_pcl is also overritten"""
 
         aligned_pointcloud = None
-        # get the pcl of object
         pcd_object = self.list_object_pointcloud[object_identifier]
 
-        # First calculate the vectors a and b from points
+        # TODO: Check if points were picked
+
+        # First calculate the vectors a and b from points --> coor frame of map
         map_points = self.list_picked_points[object_identifier, 0, :, :]
         map_vector_a = map_points[1,:] - map_points[0, :]
         map_vector_b = map_points[2, :] - map_points[0, :]
@@ -187,18 +244,31 @@ class label_generator():
         object_coor_z = object_points_cross_vector_a_b/np.linalg.norm(object_points_cross_vector_a_b)
         object_coor_y = np.cross(object_coor_x, object_coor_z)/np.linalg.norm(np.cross(object_coor_x, object_coor_z))
 
+        #calc rot matrix from coor frame.
         rotation_matrix_unit_to_object = np.transpose(np.array([object_coor_x, object_coor_y, object_coor_z]))
         rotation_matrix_unit_to_map = np.transpose(np.array([map_coor_x, map_coor_y , map_coor_z]))
 
         rotation_matrix_object_to_unit = np.linalg.inv(rotation_matrix_unit_to_object)
         rotation_matrix = np.matmul(rotation_matrix_unit_to_map, rotation_matrix_object_to_unit)
 
-        # shift object to positon in map, then rotate the object. Center of Rotation are the first picked points
-        translation_vector_object = map_points[0, :] - object_points[0, :]
-        pcd_object.translate(translation_vector_object)
+        # shift object to center of its picked coor_frame, then rotate it, then shift it to map position. Combine it
+        # together to one transform
+        translation_1 = np.eye(4)
+        translation_1[:3,3] = -object_points[0, :]
+        #print(translation_1)
 
-        pcd_object.rotate(rotation_matrix, map_points[0, :])
+        rotation_transform_matrix = np.eye(4)
+        rotation_transform_matrix[:3,:3] = rotation_matrix
+        #print(rotation_transform_matrix)
 
+        translation_2 = np.eye(4)
+        translation_2[:3,3] = map_points[0, :]
+        #print(translation_2)
+
+        transform_matrix_comb = np.matmul(translation_2, np.matmul(rotation_transform_matrix,translation_1))
+        pcd_object.transform(transform_matrix_comb)
+
+        # TODO add window to show alignment before icp. ALso Input dialog for needed if realignment is needed
         print("Starting ICP:")
         threshold = 0.02
         print(o3d.pipelines.registration.evaluate_registration(pcd_object, self.map_pointcloud, threshold))
@@ -212,6 +282,9 @@ class label_generator():
 
         pcd_object.transform(reg_p2p.transformation)
 
+        transform_matrix_final = np.matmul(reg_p2p.transformation, transform_matrix_comb)
+        self.list_transform_matrices_objects[object_identifier] = np.matmul(reg_p2p.transformation, transform_matrix_final)
+
         vis = o3d.visualization.Visualizer()
         vis.create_window(window_name='Object_Alignment', width=960, height=540, left=960, top=0)
         vis.add_geometry(pcd_object)
@@ -223,10 +296,17 @@ class label_generator():
 
         return aligned_pointcloud
 
+    def save_object(self):
+        """Saves the object. Pickle library is used."""
+
+        with open(os.path.join(self.log_path, "cad_data", "label_generator_object.pkl"), 'wb') as output:
+            pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
+        return
+
 
 generator = label_generator()
-generator.load_map_file()
-generator.load_object_file()
+generator.load_log_directory()
+# generator.load_map_file()
+# generator.load_object_file()
 generator.start_picking_points()
 generator.align_object(0)
-# vis2.destroy_window()

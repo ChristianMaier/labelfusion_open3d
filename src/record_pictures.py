@@ -12,19 +12,16 @@ import os
 from datetime import datetime
 from pathlib import Path
 import subprocess
+from tkinter import filedialog
 
 from pynput import keyboard
-import copy
-
-# define source library path, TODO update way to implement this
-#SOURCE_LIB_PATH = "/home/christian/python_projects/image_data_pipeline"
 
 class image_collecter:
     # class for collecting images from rgb and depth stream and processing them in the right format
     def __init__(self, save_images):
         self.dataset_name = (str(datetime.now()).split('.')[0]).replace(" ", "_")
         self.source_lib_path = str(os.path.dirname(os.path.abspath(__file__))).split("/src")[0]
-        self.dataset_source_path = os.path.join(self.source_lib_path,"image_data", self.dataset_name)
+        self.dataset_source_path = os.path.join(self.define_dataset_path(), self.dataset_name)
         self.list_depth_images = []
         self.list_color_images = []
         self.stream_resolution = (1280, 720)
@@ -35,6 +32,17 @@ class image_collecter:
 
         # keyboard_listener for controlling image_processing
         self.keyboard_listener = None
+
+    def define_dataset_path(self):
+        """This function generates a User input dialog for the user to define where the pictures should be saved.
+        If no input is made, error is raised. In the given directory extra folder for this log is made.
+        :returns dataset path as string"""
+
+        dataset_path = filedialog.askdirectory(initialdir=self.source_lib_path, title="Select directory for log")
+        if not dataset_path:
+            raise IOError("No directory for saving log was given. Log recording canceled.")
+
+        return dataset_path
 
     def start_image_collection(self):
         pipeline = rs.pipeline()
@@ -201,6 +209,7 @@ class image_collecter:
     def generate_klg(self):
         """
         generate the the klg file for elasticfusion from the png pictures. Docker for png_to_klg-docker is necessary
+        In addition, here the camera params are saved.
 
         input: nothing
 
@@ -212,6 +221,7 @@ class image_collecter:
                                    + self.dataset_name + """/' -o '/input-output/log.klg'" """],
                                   shell=True)
             Path(os.path.join(self.dataset_source_path,"cad_data")).mkdir(parents=True, exist_ok=True)
+            Path(os.path.join(self.dataset_source_path, "cad_data","object_meshes")).mkdir(parents=True, exist_ok=True)
 
             # change location of klg file
             os.rename((self.dataset_source_path.split(self.dataset_name)[0])+ "log.klg",
