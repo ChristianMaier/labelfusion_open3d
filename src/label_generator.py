@@ -6,6 +6,7 @@ import multiprocessing
 import numpy as np
 import warnings
 import pickle
+from scipy.spatial.transform import Rotation as R
 
 
 class label_generator():
@@ -28,6 +29,7 @@ class label_generator():
 
         # Initial dir for input dialogs
         self.__initial_dir = str(os.path.dirname(os.path.abspath(__file__))).split("/src")[0]
+        self.__picture_size = (640, 480)
 
         return
 
@@ -165,7 +167,7 @@ class label_generator():
             raise IOError("Not enough points were picked, three points are necessary.")
 
         elif len(vis.get_picked_points()) == 3:
-            print("Following points were picked:")
+            print("Following points of map were picked:")
             picked_points = points[vis.get_picked_points()]
 
         else:
@@ -190,7 +192,7 @@ class label_generator():
             raise IOError("Not enough points were picked, three points are necessary.")
 
         elif len(vis.get_picked_points()) == 3:
-            print("Following points were picked:")
+            print("Following points of object were picked:")
             picked_points = points[vis.get_picked_points()]
 
         else:
@@ -227,11 +229,11 @@ class label_generator():
 
         self.list_picked_points[-1, 0 , :, :] = return_dict[0]
         self.list_picked_points[-1, 1, :, :] = return_dict[1]
-        print(self.list_picked_points)
+        #print(self.list_picked_points)
         print("Picking points finished")
         return
 
-    def align_object(self,object_identifier):
+    def align_object(self,object_identifier, b_show_alignment):
         """ this function function aligns the object in the map from the input of the user. The initial alignment can
         then be used by icp to get a better alignment. Alignment is done by using the points in list_picked_point calculate
         the planes (by cross product) and align the planes. Alignment is done at the first point picked at the map and object
@@ -288,7 +290,18 @@ class label_generator():
         transform_matrix_comb = np.matmul(translation_2, np.matmul(rotation_transform_matrix,translation_1))
         pcd_object.transform(transform_matrix_comb)
 
-        # TODO add window to show alignment before icp. ALso Input dialog for needed if realignment is needed
+        if (b_show_alignment):
+            print("Alignment from picked points")
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(window_name='Initial_Object_Alignment', width=960, height=540, left=960, top=0)
+            vis.add_geometry(pcd_object)
+            vis.update_geometry(pcd_object)
+            vis.add_geometry(self.map_pointcloud)
+            vis.update_geometry(self.map_pointcloud)
+            vis.run()
+            vis.destroy_window()
+
+        # TODO add Input dialog if realignment is needed
         print("Starting ICP:")
         threshold = 0.02
         print(o3d.pipelines.registration.evaluate_registration(pcd_object, self.map_pointcloud, threshold))
@@ -302,19 +315,29 @@ class label_generator():
 
         pcd_object.transform(reg_p2p.transformation)
 
-        transform_matrix_final = np.matmul(reg_p2p.transformation, transform_matrix_comb)
-        self.list_transform_matrices_objects[object_identifier] = np.matmul(reg_p2p.transformation, transform_matrix_final)
 
-        vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name='Object_Alignment', width=960, height=540, left=960, top=0)
-        vis.add_geometry(pcd_object)
-        vis.update_geometry(pcd_object)
-        vis.add_geometry(self.map_pointcloud)
-        vis.update_geometry(self.map_pointcloud)
-        vis.run()
-        vis.destroy_window()
+        self.list_transform_matrices_objects[object_identifier] = np.matmul(reg_p2p.transformation, transform_matrix_comb)
+
+        mesh_object = o3d.io.read_triangle_mesh(self.list_object_filepath[object_identifier])
+        mesh_object.transform(self.list_transform_matrices_objects[object_identifier, : , :])
+
+        if (b_show_alignment):
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(window_name='Final Object_Alignment', width=960, height=540, left=960, top=0)
+            vis.add_geometry(mesh_object)
+            vis.update_geometry(mesh_object)
+
+            vis.add_geometry(pcd_object)
+            vis.update_geometry(pcd_object)
+
+            vis.add_geometry(self.map_pointcloud)
+            vis.update_geometry(self.map_pointcloud)
+            vis.run()
+            vis.destroy_window()
 
         return aligned_pointcloud
+
+        print("Info: Alignment finished successfully")
 
     def save_object(self):
         """Saves the object. Pickle library is used."""
@@ -323,10 +346,111 @@ class label_generator():
             pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
         return
 
+    def generate_labels(self):
+
+        # read freiburg file and process it in numpy array, save it in trajectory
+        freiburg_file = open(os.path.join(self.log_path, "cad_data", "log.klg.freiburg"), "r")
+        trajectories_lines = freiburg_file.readlines()
+        trajectories_as_float = []
+
+        for line in trajectories_lines[:]:
+            line = line[:-1]
+            line_as_list = line.split(' ')
+            # print(len(line_as_list))
+            line_as_float = []
+            for i in range(len(line_as_list)):
+                line_as_float.append(float(line_as_list[i]))
+
+            trajectories_as_float.append(line_as_float)
+
+        trajectory = np.array(trajectories_as_float)
+
+        mesh_object = o3d.io.read_triangle_mesh(self.list_object_filepath[0])
+        mesh_object.transform(self.list_transform_matrices_objects[0, : , :])
+
+
+        if os.path.isfile(os.path.join(self.log_path, "cal_640.txt")):
+            cal_file = open(os.path.join(self.log_path, "cal_640.txt"), "r")
+            line_cal = str(cal_file.readline())
+            line_cal_as_list = line_cal.split(' ')
+            # print(len(line_as_list))
+            line_cal_as_float = []
+            print(line_cal_as_list)
+            for number in line_cal_as_list:
+                if not number == '':
+                    line_cal_as_float.append(float(number))
+                    
+            calibration_intrinsic = [self.__picture_size[0], self.__picture_size[1],line_cal_as_float[0],
+                                     line_cal_as_float[1],
+                                     line_cal_as_float[2],
+                                     line_cal_as_float[3]]
+
+        else:
+            calibration_intrinsic = [self.__picture_size[0], self.__picture_size[1], 613.1024780273438, 611.6202392578125, 319.5, 239.5]
+
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(width=self.__picture_size[0], height=self.__picture_size[1])
+        vis.add_geometry(mesh_object)
+        vis.update_geometry(mesh_object)
+        vis.add_geometry(self.map_pointcloud)
+        vis.update_geometry(self.map_pointcloud)
+
+        ctr = vis.get_view_control()
+        camera_params = ctr.convert_to_pinhole_camera_parameters()
+        camera_params.intrinsic.set_intrinsics(calibration_intrinsic[0],
+                                               calibration_intrinsic[1],
+                                               calibration_intrinsic[2],
+                                               calibration_intrinsic[3],
+                                               calibration_intrinsic[4],
+                                               calibration_intrinsic[5])
+
+        ctr.convert_from_pinhole_camera_parameters(camera_params)
+
+        print(np.shape(trajectory))
+        # use function-object variables to import necessary outer variables
+
+        for i in range(np.shape(trajectory)[0]):
+            trajectory_point = trajectory[i, :]
+
+            camera_params = ctr.convert_to_pinhole_camera_parameters()
+            rot = np.eye(4)
+
+            quaternion = trajectory_point[4:]
+            translation = trajectory_point[1:4]
+            timestamp = trajectory_point[0]
+
+            # adjust the rotation Matrix
+            rotation = R.from_quat(quaternion)
+            rot[:3, :3] = np.linalg.inv(rotation.as_matrix())
+            vector_world_in_camera = - np.matmul(np.linalg.inv(rotation.as_matrix()), translation)
+            rot[:3, 3] = np.array(vector_world_in_camera.transpose())
+            camera_params.extrinsic = rot
+
+            ctr.convert_from_pinhole_camera_parameters(camera_params)
+
+            camera_params.extrinsic = rot
+            camera_params.intrinsic.set_intrinsics(calibration_intrinsic[0],
+                                                   calibration_intrinsic[1],
+                                                   calibration_intrinsic[2],
+                                                   calibration_intrinsic[3],
+                                                   calibration_intrinsic[4],
+                                                   calibration_intrinsic[5])
+
+            ctr.convert_from_pinhole_camera_parameters(camera_params)
+
+            vis.update_geometry(mesh_object)
+            vis.poll_events()
+            vis.update_renderer()
+
+        vis.destroy_window()
+
+        return
+
 
 generator = label_generator()
 generator.load_log_directory()
 # generator.load_map_file()
 # generator.load_object_file()
 generator.start_picking_points()
-generator.align_object(0)
+generator.align_object(0, True)
+generator.generate_labels()
