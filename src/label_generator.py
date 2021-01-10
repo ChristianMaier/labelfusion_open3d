@@ -490,25 +490,27 @@ class label_generator():
 
             for j in range(len(self.list_object_filepath)):
                 color = j
-                object_images[j, :, :, 2] = np.multiply((np.equal(ones * self.color_coding[color, 0],
-                                                                  img[:, :, 2])).astype(int), img[:, :, 2])
-                object_images[j, :, :, 1] = np.multiply((np.equal(ones * self.color_coding[color, 1],
-                                                                  img[:, :, 1])).astype(int), img[:, :, 1])
-                object_images[j, :, :, 0] = np.multiply((np.equal(ones * self.color_coding[color, 2],
-                                                                  img[:, :, 0])).astype(int), img[:, :, 0])
+                red = (np.equal(ones * self.color_coding[color, 0],img[:, :, 2])).astype(int)
+                green = (np.equal(ones * self.color_coding[color, 1],img[:, :, 1])).astype(int)
+                blue = (np.equal(ones * self.color_coding[color, 2],img[:, :, 0])).astype(int)
+                rgb_compare_combined = np.multiply(np.multiply(red, green), blue)
+
+                object_images[j, :, :, 2] = np.multiply(rgb_compare_combined, img[:, :, 2])
+                object_images[j, :, :, 1] = np.multiply(rgb_compare_combined, img[:, :, 1])
+                object_images[j, :, :, 0] = np.multiply(rgb_compare_combined, img[:, :, 0])
                 width_object = []
                 height_object = []
                 width_object = np.unique((np.nonzero(object_images[j, :, :, :])[0]))
                 height_object = np.unique((np.nonzero(object_images[j, :, :, :])[1]))
                 cv2.rectangle(img_changed, (height_object.min(), width_object.min()), (height_object.max(), width_object.max()),
                               (1, 1, 1), 3)
-                cv2.imshow("Display window", object_images[j, :, :, :])
-                cv2.waitKey(500)
+                # cv2.imshow("Display window", object_images[j, :, :, :])
+                # cv2.waitKey(500)
 
             img_changed = img_changed * 255
             cv2.imwrite(os.path.join(self.log_path, "labeled_images", str(pictures_names[i]) + ".png"),img_changed)
-            # cv2.imshow("Display window", img)
-            # cv2.waitKey(1)
+            cv2.imshow("Display window", img_changed)
+            cv2.waitKey(1)
             # cv2.imwrite(os.path.join(filename_map, "labeled_images", str(timestamp) + '.png'), img)
 
         vis.destroy_window()
