@@ -8,6 +8,7 @@ import warnings
 import pickle
 from scipy.spatial.transform import Rotation as R
 import cv2
+from pathlib import Path
 
 
 class label_generator():
@@ -435,6 +436,19 @@ class label_generator():
         render_option = vis.get_render_option()
         render_option.background_color = np.array([0, 0, 0])
 
+        try:
+            pictures_file = open(os.path.join(self.log_path, "associations.txt"), "r")
+        except:
+            raise IOError("Could not open associations.txt")
+
+        pictures_file_list = pictures_file.readlines()
+        pictures_names = []
+        for line in pictures_file_list:
+            pictures_names.append(line.split(" ")[0])
+
+        #print(pictures_names)
+        Path(os.path.join(self.log_path, "labeled_images")).mkdir(parents=True, exist_ok=True)
+
         for i in range(np.shape(trajectory)[0]):
             trajectory_point = trajectory[i, :]
 
@@ -472,23 +486,29 @@ class label_generator():
 
             ones = np.ones_like(img[:, :, 0])
             object_images = np.zeros([len(self.list_object_filepath), np.shape(img)[0], np.shape(img)[1], np.shape(img)[2] ] )
+            img_changed = img
 
-            for i in range(len(self.list_object_filepath)):
-                color = i
-                object_images[i, :, :, 2] = np.multiply((np.equal(ones * self.color_coding[color, 0],
+            for j in range(len(self.list_object_filepath)):
+                color = j
+                object_images[j, :, :, 2] = np.multiply((np.equal(ones * self.color_coding[color, 0],
                                                                   img[:, :, 2])).astype(int), img[:, :, 2])
-                object_images[i, :, :, 1] = np.multiply((np.equal(ones * self.color_coding[color, 1],
+                object_images[j, :, :, 1] = np.multiply((np.equal(ones * self.color_coding[color, 1],
                                                                   img[:, :, 1])).astype(int), img[:, :, 1])
-                object_images[i, :, :, 0] = np.multiply((np.equal(ones * self.color_coding[color, 2],
+                object_images[j, :, :, 0] = np.multiply((np.equal(ones * self.color_coding[color, 2],
                                                                   img[:, :, 0])).astype(int), img[:, :, 0])
+                width_object = []
+                height_object = []
+                width_object = np.unique((np.nonzero(object_images[j, :, :, :])[0]))
+                height_object = np.unique((np.nonzero(object_images[j, :, :, :])[1]))
+                cv2.rectangle(img_changed, (height_object.min(), width_object.min()), (height_object.max(), width_object.max()),
+                              (1, 1, 1), 3)
+                cv2.imshow("Display window", object_images[j, :, :, :])
+                cv2.waitKey(500)
 
-                width_object = (np.unique((np.nonzero(object_images[i, :, :, :])[0])))
-                height_object = (np.unique((np.nonzero(object_images[i, :, :, :])[1])))
-                cv2.rectangle(img, (height_object.min(), width_object.min()), (height_object.max(), width_object.max()),
-                              (0, 255, 0), 3)
-
-            cv2.imshow("Display window", img);
-            cv2.waitKey(1)
+            img_changed = img_changed * 255
+            cv2.imwrite(os.path.join(self.log_path, "labeled_images", str(pictures_names[i]) + ".png"),img_changed)
+            # cv2.imshow("Display window", img)
+            # cv2.waitKey(1)
             # cv2.imwrite(os.path.join(filename_map, "labeled_images", str(timestamp) + '.png'), img)
 
         vis.destroy_window()
