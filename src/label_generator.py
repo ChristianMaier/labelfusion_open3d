@@ -7,6 +7,7 @@ import numpy as np
 import warnings
 import pickle
 from scipy.spatial.transform import Rotation as R
+import cv2
 
 
 class label_generator():
@@ -26,6 +27,13 @@ class label_generator():
         self.list_transform_matrices_objects= np.empty((0, 4, 4)) # list of the transform_matrices where the objects where detected
         self.log_path = ""
 
+        # color coding used for generating labeled pictures. Currently only 6 object are supported
+        self.color_coding = np.array([[1, 0 , 0],
+                                     [0, 1 , 0],
+                                     [0, 0 , 1],
+                                     [1, 1 , 0],
+                                     [0, 1 , 1],
+                                     [1, 0 , 1]])
 
         # Initial dir for input dialogs
         self.__initial_dir = str(os.path.dirname(os.path.abspath(__file__))).split("/src")[0]
@@ -204,23 +212,23 @@ class label_generator():
         return_dict[1] = picked_points
         return
 
-    def start_picking_points(self):
+    def start_picking_points(self, object_identifier):
 
         # initialize lists. they are filled later
         self.list_picked_points = np.append(self.list_picked_points, np.zeros((1, 2, 3, 3)), axis=0)
         self.list_transform_matrices_objects = np.append(self.list_transform_matrices_objects, np.zeros(((1, 4, 4))), axis=0)
         self.list_transform_matrices_objects[-1, : , :] = np.eye(4)
 
+        # text = "please pick three points in the map and the object to detect the initial localisation"
+        # messagebox.showinfo(title="Object initial localisation", message=text)
+
         manager = multiprocessing.Manager()
         return_dict = manager.dict()
-
-        text = "please pick three points in the map and the object to detect the initial localisation"
-        messagebox.showinfo(title="Object initial localisation", message=text)
 
         window1 = multiprocessing.Process(target=self.__run_pick_points_map_window, args=(self.map_pointcloud,return_dict))
         window1.start()
 
-        window2 = multiprocessing.Process(target=self.__run_pick_points_object_window, args=(self.list_object_pointcloud[0],return_dict))
+        window2 = multiprocessing.Process(target=self.__run_pick_points_object_window, args=(self.list_object_pointcloud[object_identifier],return_dict))
         window2.start()
 
         # joining the processes
@@ -233,7 +241,7 @@ class label_generator():
         print("Picking points finished")
         return
 
-    def align_object(self,object_identifier, b_show_alignment):
+    def align_object(self,object_identifier, b_show_alignment, i_icp_iterations):
         """ this function function aligns the object in the map from the input of the user. The initial alignment can
         then be used by icp to get a better alignment. Alignment is done by using the points in list_picked_point calculate
         the planes (by cross product) and align the planes. Alignment is done at the first point picked at the map and object
@@ -241,6 +249,8 @@ class label_generator():
         :input object identifier as int
 
         :returns the aligned pointcloud of the object, pcl object in list_object_pcl is also overritten"""
+
+        self.start_picking_points(object_identifier)
 
         aligned_pointcloud = None
         pcd_object = self.list_object_pointcloud[object_identifier]
@@ -311,7 +321,7 @@ class label_generator():
                                                                    [0., 0., 0., 1.]]),
                                                               o3d.pipelines.registration.TransformationEstimationPointToPoint(),
                                                               o3d.pipelines.registration.ICPConvergenceCriteria(
-                                                                  max_iteration=50))
+                                                                  max_iteration=i_icp_iterations))
 
         pcd_object.transform(reg_p2p.transformation)
 
@@ -335,18 +345,33 @@ class label_generator():
             vis.run()
             vis.destroy_window()
 
+        print("Info: Alignment finished successfully")
         return aligned_pointcloud
 
-        print("Info: Alignment finished successfully")
+    def save_alignment(self):
+        """Saves the alignment. Pickle library is used."""
 
-    def save_object(self):
-        """Saves the object. Pickle library is used."""
-
+        # PCL object can't be saved --> have to be cleared
+        self.map_pointcloud = None
+        self.list_object_pointcloud = None
         with open(os.path.join(self.log_path, "cad_data", "label_generator_object.pkl"), 'wb') as output:
             pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
         return
 
-    def generate_labels(self):
+    def load_alignment(self):
+        """loads an already saved alignment.
+
+        :returns: the loaded object"""
+        try:
+            with open(os.path.join(self.log_path, "cad_data", "label_generator_object.pkl"), 'rb') as input:
+                generator_object = pickle.load(input)
+
+        except:
+            raise IOError("Could not open label_generator object. Does it already exist?")
+
+        return generator_object
+
+    def display_trajectory(self):
 
         # read freiburg file and process it in numpy array, save it in trajectory
         freiburg_file = open(os.path.join(self.log_path, "cad_data", "log.klg.freiburg"), "r")
@@ -356,7 +381,6 @@ class label_generator():
         for line in trajectories_lines[:]:
             line = line[:-1]
             line_as_list = line.split(' ')
-            # print(len(line_as_list))
             line_as_float = []
             for i in range(len(line_as_list)):
                 line_as_float.append(float(line_as_list[i]))
@@ -365,15 +389,11 @@ class label_generator():
 
         trajectory = np.array(trajectories_as_float)
 
-        mesh_object = o3d.io.read_triangle_mesh(self.list_object_filepath[0])
-        mesh_object.transform(self.list_transform_matrices_objects[0, : , :])
-
-
+        # load cal file for camera params an process it
         if os.path.isfile(os.path.join(self.log_path, "cal_640.txt")):
             cal_file = open(os.path.join(self.log_path, "cal_640.txt"), "r")
             line_cal = str(cal_file.readline())
             line_cal_as_list = line_cal.split(' ')
-            # print(len(line_as_list))
             line_cal_as_float = []
             print(line_cal_as_list)
             for number in line_cal_as_list:
@@ -386,14 +406,20 @@ class label_generator():
                                      line_cal_as_float[3]]
 
         else:
+            # standard calibration if no file is available
             calibration_intrinsic = [self.__picture_size[0], self.__picture_size[1], 613.1024780273438, 611.6202392578125, 319.5, 239.5]
 
         vis = o3d.visualization.Visualizer()
         vis.create_window(width=self.__picture_size[0], height=self.__picture_size[1])
-        vis.add_geometry(mesh_object)
-        vis.update_geometry(mesh_object)
-        vis.add_geometry(self.map_pointcloud)
-        vis.update_geometry(self.map_pointcloud)
+
+        # load as mesh, not as point cloud
+        for i in range(len(self.list_object_filepath)):
+            mesh_object = o3d.io.read_triangle_mesh(self.list_object_filepath[i])
+            mesh_object.transform(self.list_transform_matrices_objects[i, : , :])
+            print(self.color_coding[i, :])
+            mesh_object.paint_uniform_color(self.color_coding[i, :])
+            vis.add_geometry(mesh_object)
+            vis.update_geometry(mesh_object)
 
         ctr = vis.get_view_control()
         camera_params = ctr.convert_to_pinhole_camera_parameters()
@@ -406,8 +432,8 @@ class label_generator():
 
         ctr.convert_from_pinhole_camera_parameters(camera_params)
 
-        print(np.shape(trajectory))
-        # use function-object variables to import necessary outer variables
+        render_option = vis.get_render_option()
+        render_option.background_color = np.array([0, 0, 0])
 
         for i in range(np.shape(trajectory)[0]):
             trajectory_point = trajectory[i, :]
@@ -442,6 +468,29 @@ class label_generator():
             vis.poll_events()
             vis.update_renderer()
 
+            img = cv2.cvtColor(np.asarray(vis.capture_screen_float_buffer(False)), cv2.COLOR_BGR2RGB)
+
+            ones = np.ones_like(img[:, :, 0])
+            object_images = np.zeros([len(self.list_object_filepath), np.shape(img)[0], np.shape(img)[1], np.shape(img)[2] ] )
+
+            for i in range(len(self.list_object_filepath)):
+                color = i
+                object_images[i, :, :, 2] = np.multiply((np.equal(ones * self.color_coding[color, 0],
+                                                                  img[:, :, 2])).astype(int), img[:, :, 2])
+                object_images[i, :, :, 1] = np.multiply((np.equal(ones * self.color_coding[color, 1],
+                                                                  img[:, :, 1])).astype(int), img[:, :, 1])
+                object_images[i, :, :, 0] = np.multiply((np.equal(ones * self.color_coding[color, 2],
+                                                                  img[:, :, 0])).astype(int), img[:, :, 0])
+
+                width_object = (np.unique((np.nonzero(object_images[i, :, :, :])[0])))
+                height_object = (np.unique((np.nonzero(object_images[i, :, :, :])[1])))
+                cv2.rectangle(img, (height_object.min(), width_object.min()), (height_object.max(), width_object.max()),
+                              (0, 255, 0), 3)
+
+            cv2.imshow("Display window", img);
+            cv2.waitKey(1)
+            # cv2.imwrite(os.path.join(filename_map, "labeled_images", str(timestamp) + '.png'), img)
+
         vis.destroy_window()
 
         return
@@ -449,8 +498,11 @@ class label_generator():
 
 generator = label_generator()
 generator.load_log_directory()
-# generator.load_map_file()
-# generator.load_object_file()
-generator.start_picking_points()
-generator.align_object(0, True)
-generator.generate_labels()
+#generator.load_map_file()
+#generator.load_object_file()
+#generator.start_picking_points()
+#generator.align_object(0, True, 5)
+#generator.align_object(1, True, 5)
+#generator.save_alignment()
+generator = generator.load_alignment()
+generator.display_trajectory()
